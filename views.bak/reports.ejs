@@ -1,0 +1,83 @@
+<%- include('partials/header') %>
+  <div class="bg-white rounded shadow p-6">
+    <h2 class="text-xl font-semibold mb-2">Reports (latest 200)</h2>
+    <% if (banner) { %>
+      <div class="mb-4 px-4 py-2 rounded bg-emerald-50 border border-emerald-200 text-emerald-800"><%= banner %></div>
+    <% } %>
+
+    <form method="POST" id="bulkForm" class="mb-3 flex items-center gap-2 flex-wrap">
+      <button formaction="/reports/send" formmethod="POST"
+              class="py-2 px-4 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+              id="sendBtn" disabled>
+        Send mail
+      </button>
+      <button formaction="/reports/delete" formmethod="POST"
+              class="py-2 px-4 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+              id="deleteBtn" disabled>
+        Delete selected
+      </button>
+      <a href="/reports/export" class="py-2 px-4 rounded bg-emerald-600 text-white hover:bg-emerald-700">
+        Download Excel
+      </a>
+      <span class="text-sm text-gray-600">(“Send mail” uses each row’s A-dates to build the standard mail body.)</span>
+    </form>
+
+    <div class="overflow-x-auto">
+      <table class="min-w-full border text-sm">
+        <thead class="bg-gray-100">
+          <tr>
+            <th class="border px-3 py-2"><input type="checkbox" id="selectAll" title="Select all" /></th>
+            <th class="border px-3 py-2 text-left">Employee ID</th>
+            <th class="border px-3 py-2 text-left">Employee Name</th>
+            <th class="border px-3 py-2 text-left">Email ID</th>
+            <th class="border px-3 py-2 text-left">Count</th>
+            <th class="border px-3 py-2 text-left">LOP Dates</th>
+            <th class="border px-3 py-2 text-left">Absent count</th>
+            <th class="border px-3 py-2 text-left">LOP count</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!records || records.length === 0) { %>
+            <tr><td colspan="8" class="text-center text-gray-500 px-3 py-4">No records yet.</td></tr>
+          <% } %>
+          <% records.forEach(r => { %>
+            <tr class="hover:bg-gray-50 align-top">
+              <td class="border px-3 py-2">
+                <input type="checkbox" name="ids" value="<%= r.id %>" class="rowChk" form="bulkForm" />
+              </td>
+              <td class="border px-3 py-2 whitespace-nowrap"><%= r.emp_id || '' %></td>
+              <td class="border px-3 py-2"><%= r.emp_name %></td>
+              <td class="border px-3 py-2"><%= r.recipient %></td>
+              <td class="border px-3 py-2 font-semibold"><%= r.total_count %></td>
+              <td class="border px-3 py-2"><%= r.lop_dates %></td>
+              <td class="border px-3 py-2"><%= r.absent_count %></td>
+              <td class="border px-3 py-2"><%= r.lop_count %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const selectAll = document.getElementById('selectAll');
+    const sendBtn = document.getElementById('sendBtn');
+    const deleteBtn = document.getElementById('deleteBtn');
+    const rowChks = () => Array.from(document.querySelectorAll('.rowChk'));
+    function refreshBtns(){
+      const any = rowChks().some(cb => cb.checked);
+      sendBtn.disabled = !any;
+      deleteBtn.disabled = !any;
+    }
+    selectAll?.addEventListener('change', () => {
+      rowChks().forEach(cb => cb.checked = selectAll.checked);
+      refreshBtns();
+    });
+    document.addEventListener('change', (e) => {
+      if (e.target.classList?.contains('rowChk')) {
+        if (!e.target.checked) selectAll.checked = false;
+        refreshBtns();
+      }
+    });
+  </script>
+<%- include('partials/footer') %>

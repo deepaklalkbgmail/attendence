@@ -1,0 +1,35 @@
+<%- include('partials/header') %>
+  <div class="bg-white rounded shadow p-6">
+    <h2 class="text-xl font-semibold mb-4">Comparison Result</h2>
+    <p class="mb-4 text-sm text-gray-600">Batch: <span class="font-mono"><%= batch_key %></span></p>
+
+    <div class="overflow-x-auto">
+      <table class="min-w-full border text-sm">
+        <thead class="bg-gray-100">
+          <tr>
+            <th class="border px-3 py-2 text-left">Employee ID</th>
+            <th class="border px-3 py-2 text-left">Employee Name</th>
+            <th class="border px-3 py-2 text-left">Email ID</th>
+            <th class="border px-3 py-2 text-left">Change</th>
+            <th class="border px-3 py-2 text-left">Changed Dates</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!rows || rows.length === 0) { %>
+            <tr><td colspan="5" class="text-center text-gray-500 px-3 py-4">No changes found.</td></tr>
+          <% } else { %>
+            <% rows.forEach(r => { %>
+              <tr class="hover:bg-gray-50">
+                <td class="border px-3 py-2 whitespace-nowrap"><%= r.emp_id %></td>
+                <td class="border px-3 py-2"><%= r.emp_name %></td>
+                <td class="border px-3 py-2"><%= r.email %></td>
+                <td class="border px-3 py-2 font-semibold text-rose-700"><%= r.change %></td>
+                <td class="border px-3 py-2"><%= r.changed_dates %></td>
+              </tr>
+            <% }) %>
+          <% } %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+<%- include('partials/footer') %>

@@ -1,0 +1,21 @@
+<%- include('partials/header') %>
+  <div class="bg-white rounded shadow p-6 max-w-2xl">
+    <h2 class="text-xl font-semibold mb-4">SMTP Settings</h2>
+    <form method="POST">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <label class="block">Host<input class="border rounded w-full px-2 py-1" name="host" value="<%= settings.host || '' %>" /></label>
+        <label class="block">Port<input class="border rounded w-full px-2 py-1" name="port" value="<%= settings.port || 587 %>" /></label>
+        <label class="block">Secure (SSL/TLS)
+          <select name="secure" class="border rounded w-full px-2 py-1">
+            <option value="0" <%= settings.secure ? '' : 'selected' %>>No (STARTTLS)</option>
+            <option value="1" <%= settings.secure ? 'selected' : '' %>>Yes</option>
+          </select>
+        </label>
+        <label class="block">Username<input class="border rounded w-full px-2 py-1" name="user" value="<%= settings.user || '' %>" /></label>
+        <label class="block">Password<input class="border rounded w-full px-2 py-1" name="pass" type="password" value="<%= settings.pass || '' %>" /></label>
+        <label class="block">From address<input class="border rounded w-full px-2 py-1" name="from_addr" value="<%= settings.from_addr || '' %>" /></label>
+      </div>
+      <button class="mt-4 bg-blue-600 hover:bg-blue-700 text-white rounded px-4 py-2">Save</button>
+    </form>
+  </div>
+<%- include('partials/footer') %>

@@ -1,0 +1,29 @@
+<%- include('partials/header') %>
+  <div class="bg-white rounded shadow p-6">
+    <h2 class="text-xl font-semibold mb-4">Upload Excel</h2>
+    <% if (error) { %>
+      <div class="bg-red-100 border border-red-200 text-red-700 px-4 py-2 rounded mb-4"><%= error %></div>
+    <% } %>
+    <form action="/upload" method="POST" enctype="multipart/form-data" class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium mb-1">Choose .xls / .xlsx</label>
+        <input name="excel" type="file" accept=".xls,.xlsx" class="w-full" required />
+      </div>
+      <button class="py-2 px-4 rounded bg-gray-800 text-white hover:bg-black">Upload & Preview</button>
+    </form>
+
+    <% if (preview) { %>
+      <div class="mt-6 p-4 rounded border bg-gray-50">
+        <p class="mb-1">File: <span class="font-mono"><%= preview.file %></span></p>
+        <p class="mb-1">Batch period: <strong><%= preview.batch_key %></strong></p>
+        <p class="mb-4">Detected recipients with absences: <strong><%= preview.recipients %></strong></p>
+        <form action="/report" method="POST" class="inline">
+          <button class="py-2 px-4 rounded bg-blue-600 text-white hover:bg-blue-700">Report Generation</button>
+        </form>
+        <form action="/compare" method="POST" class="inline ml-2">
+          <button class="py-2 px-4 rounded bg-amber-600 text-white hover:bg-amber-700">Compare with baseline</button>
+        </form>
+      </div>
+    <% } %>
+  </div>
+<%- include('partials/footer') %>
