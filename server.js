@@ -1,0 +1,477 @@
+
+/* attendance-mailer v5.2 (full)
+   - Robust compare that includes fully-corrected A's
+   - Reports table shows both LOP Dates and Absent Dates
+   - Bulk send, delete, and Excel export
+   - Modern EJS views expected under ./views and static assets under ./public
+*/
+require('dotenv').config();
+const path = require('path');
+const fs = require('fs');
+const express = require('express');
+const session = require('express-session');
+const multer = require('multer');
+const methodOverride = require('method-override');
+const sqlite3 = require('sqlite3').verbose();
+const xlsx = require('xlsx');
+const nodemailer = require('nodemailer');
+
+const app = express();
+const PORT = process.env.PORT || 4500;
+const HOST = process.env.HOST || '0.0.0.0';
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin';
+const SESSION_SECRET = process.env.SESSION_SECRET || 'attendance-mailer-secret';
+
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
+app.use('/public', express.static(path.join(__dirname, 'public')));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+app.use(methodOverride('_method'));
+app.use(session({ secret: SESSION_SECRET, resave: false, saveUninitialized: false }));
+
+// make banner safe in all views
+app.use((req,res,next)=>{ res.locals.banner = ''; next(); });
+
+const dataDir = path.join(__dirname, 'data');
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+
+const dbFile = path.join(__dirname, 'data', 'app.db');
+const db = new sqlite3.Database(dbFile);
+
+/* ---------- DB bootstrap & migrations ---------- */
+db.serialize(() => {
+  db.run(`CREATE TABLE IF NOT EXISTS smtp_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    host TEXT, port INTEGER, secure INTEGER, user TEXT, pass TEXT, from_addr TEXT
+  )`);
+  db.get("SELECT COUNT(*) as cnt FROM smtp_settings WHERE id=1", (err, row) => {
+    if (!err && row && row.cnt === 0) {
+      db.run(`INSERT INTO smtp_settings (id, host, port, secure, user, pass, from_addr) VALUES (1, 'smtp.office365.com', 587, 0, '', '', '')`);
+    }
+  });
+
+  db.run(`CREATE TABLE IF NOT EXISTS mail_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient TEXT NOT NULL,
+    emp_name TEXT,
+    dates TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  db.all("PRAGMA table_info(mail_logs)", (err, cols) => {
+    if (err) { console.error(err); return; }
+    const names = new Set((cols||[]).map(c => c.name));
+    const alter = (sql) => new Promise(res => db.run(sql, () => res()));
+    const tasks = [];
+    if (!names.has('absent_count')) tasks.push(alter("ALTER TABLE mail_logs ADD COLUMN absent_count INTEGER DEFAULT 0"));
+    if (!names.has('lop_count')) tasks.push(alter("ALTER TABLE mail_logs ADD COLUMN lop_count INTEGER DEFAULT 0"));
+    if (!names.has('emp_id')) tasks.push(alter("ALTER TABLE mail_logs ADD COLUMN emp_id TEXT"));
+    if (!names.has('dates_a')) tasks.push(alter("ALTER TABLE mail_logs ADD COLUMN dates_a TEXT"));
+    if (!names.has('dates_lop')) tasks.push(alter("ALTER TABLE mail_logs ADD COLUMN dates_lop TEXT"));
+    if (!names.has('batch_key')) tasks.push(alter("ALTER TABLE mail_logs ADD COLUMN batch_key TEXT"));
+    if (!names.has('is_deleted')) tasks.push(alter("ALTER TABLE mail_logs ADD COLUMN is_deleted INTEGER DEFAULT 0"));
+    Promise.all(tasks).catch(e => console.error("Migration error:", e.message));
+  });
+});
+
+/* ---------- Upload handling ---------- */
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const upDir = path.join(__dirname, 'uploads');
+    if (!fs.existsSync(upDir)) fs.mkdirSync(upDir, { recursive: true });
+    cb(null, upDir);
+  },
+  filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.round(Math.random()*1e9)}-${file.originalname}`)
+});
+const upload = multer({
+  storage,
+  fileFilter: (req, file, cb) => /\.xlsx?$/.test(file.originalname.toLowerCase()) ? cb(null, true) : cb(new Error('Only .xls/.xlsx files are allowed.')),
+  limits: { fileSize: 25*1024*1024 }
+});
+
+/* ---------- Auth ---------- */
+function requireAuth(req, res, next){ if (req.session && req.session.user==='admin') return next(); res.redirect('/login'); }
+
+/* ---------- Helpers ---------- */
+function colLetter(idx){ let s=''; idx++; while(idx){ let m=(idx-1)%26; s=String.fromCharCode(65+m)+s; idx=Math.floor((idx-1)/26);} return s; }
+function pickBestSheet(wb){ let best=wb.SheetNames[0], bestLen=0; for(const n of wb.SheetNames){ const ws=wb.Sheets[n]; const rows=xlsx.utils.sheet_to_json(ws,{header:1,defval:''}); if(rows.length>bestLen){best=n;bestLen=rows.length;} } return best; }
+function detectHeaderRowAndEmailCol(rows){
+  let headerIdx=5, emailCol=2, bestScore=-1;
+  const upTo=Math.min(rows.length,15);
+  for (let r=0;r<upTo;r++){
+    const row=rows[r]||[]; let score=0, foundEmail=-1;
+    for (let c=0;c<row.length;c++){
+      const v=(row[c]??'').toString().trim();
+      if (!v) continue;
+      if (/email/i.test(v)){ score+=5; foundEmail=c; }
+      if (c>=6 && v) score+=1;
+    }
+    if (score>bestScore){ bestScore=score; headerIdx=r; if (foundEmail>=0) emailCol=foundEmail; }
+  }
+  return { headerIdx, emailCol };
+}
+function normalizeHeaderValue(v){
+  if (typeof v==='number' && v>20000 && v<60000){ try{return xlsx.SSF.format('yyyy-mm-dd', v);}catch{ return String(v);} }
+  return (v??'').toString().trim();
+}
+function parseStartEnd(rows){
+  const find = (label) => { for (let r=0; r<Math.min(rows.length,5); r++){ const row=rows[r]||[]; for (let c=0;c<Math.min(row.length,6);c++){ const v=(row[c]||'').toString().trim().toLowerCase(); if (v.startsWith(label)){ const val=(row[c+1]||'').toString().trim(); if (val) return val; } } } return ''; };
+  const startRaw = find('start date'); const endRaw = find('end date');
+  function toIso(d){ const m=d.match(/^(\d{1,2})[ -]([A-Za-z]{3,})[ -](\d{4})$/)||d.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(!m) return d; if(m.length===4 && m[1].length<=2){ const day=+m[1]; const mon=m[2].slice(0,3).toLowerCase(); const idx=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'].indexOf(mon); const year=+m[3]; if(idx>=0) return `${year}-${String(idx+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`; } return d; }
+  const sIso=startRaw?toIso(startRaw):''; const eIso=endRaw?toIso(endRaw):''; return (sIso && eIso)?`${sIso}_to_${eIso}`:'';
+}
+function monthFullFromAbbrev(abbrev){ const m={Jan:'January',Feb:'February',Mar:'March',Apr:'April',May:'May',Jun:'June',Jul:'July',Aug:'August',Sep:'September',Oct:'October',Nov:'November',Dec:'December'}; return m[abbrev]||abbrev; }
+function formatDateLabel(label){
+  const s=(label||'').toString().trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)){ const [y,m,d]=s.split('-').map(Number); const dt=new Date(Date.UTC(y,m-1,d)); return dt.toLocaleString('en-US',{month:'long',day:'numeric',timeZone:'UTC'}); }
+  const m1=s.match(/^(\d{1,2})\s*-\s*([A-Za-z]{3})$/); if(m1){ const day=+m1[1]; const mon=monthFullFromAbbrev(m1[2].slice(0,3)); return `${mon} ${day}`; }
+  return s;
+}
+function joinWithAnd(items){ const arr=items.filter(Boolean); if(arr.length<=1) return arr.join(''); if(arr.length===2) return `${arr[0]} and ${arr[1]}`; return `${arr.slice(0,-1).join(', ')}, and ${arr[arr.length-1]}`; }
+function ordinal(n){ const s=['th','st','nd','rd'], v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]); }
+function escapeHtml(str){ return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function spacer(){ return '<p style="margin:0;">&nbsp;</p>'; }
+function buildMailDraftHTML(name, datesArr){
+  const prettyDates = joinWithAnd((datesArr||[]).map(formatDateLabel));
+  const now = new Date(); const monthName = now.toLocaleString('en-US',{month:'long'}); const deadline = `${ordinal(21)} ${monthName}, 6:00 PM`;
+  const n=escapeHtml(name||''); const d=escapeHtml(prettyDates); const link=`https://people.zoho.com/iexceed/zp`;
+  const parts=[
+    `<p>Hi ${n},</p>`, spacer(),
+    `<p>As per ZOHO records, your attendance is pending for the following dates:</p>`,
+    `<p><strong>${d}</strong>.</p>`, spacer(),
+    `<p>Please take immediate action to regularize or apply leave for these dates before <strong>${deadline}</strong> in <strong>Zoho People</strong>.</p>`,
+    `<p>If not updated within the deadline, these days will be treated as <strong>Loss of Pay (LOP)</strong>.</p>`, spacer(),
+    `<p><strong>Employee’s Action Required:</strong></p>`, spacer(),
+    `<p><strong>Regularization of Attendance</strong></p>`,
+    `<p>• Click the link: <a href="${link}">Zoho People</a></p>`,
+    `<p>• Click on <strong>Attendance</strong></p>`,
+    `<p>• Go to <strong>Request &gt; Regularization</strong></p>`,
+    `<p>• Fill in the required details and submit the form</p>`, spacer(),
+    `<p><strong>Leave Update Steps</strong></p>`,
+    `<p>• From the <strong>Home Page</strong> in Zoho People, click on the <strong>Leave</strong> tab</p>`,
+    `<p>• Select the appropriate <strong>leave type</strong></p>`,
+    `<p>• Choose the <strong>date(s) of absence</strong> and submit the request</p>`, spacer(),
+    `<p><strong>Important Note:</strong></p>`,
+    `<p>Failure to update or regularize your attendance within the cutoff period will result in <strong>Loss of Pay (LOP)</strong>.</p>`, spacer(),
+    `<p>For any assistance, please feel free to reach out to the HR team.</p>`, spacer(),
+    `<p>Thanks &amp; Regards,<br><strong>Team HR</strong></p>`
+  ];
+  return parts.join('');
+}
+
+/* ---------- Excel parsing ---------- */
+function parseExcel(filePath){
+  const wb = xlsx.readFile(filePath, { cellDates: false });
+  const sheetName = pickBestSheet(wb);
+  const ws = wb.Sheets[sheetName];
+  const rows = xlsx.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  if (!rows || rows.length < 6) throw new Error('Sheet seems too short. Expected at least 6 rows.');
+
+  const { headerIdx, emailCol } = detectHeaderRowAndEmailCol(rows);
+  const headerRowRaw = rows[headerIdx] || [];
+  const headerRow = headerRowRaw.map(normalizeHeaderValue);
+
+  let batchKey = parseStartEnd(rows);
+  if (!batchKey){
+    const dateHeaders = headerRow.slice(6).filter(Boolean);
+    const s = dateHeaders[0] || ''; const e = dateHeaders[dateHeaders.length-1] || '';
+    batchKey = `${s}_to_${e}`;
+  }
+
+  const results = [];
+  for (let r = headerIdx + 1; r < rows.length; r++) {
+    const row = rows[r] || [];
+    const email = (row[emailCol] || '').toString().trim();
+    if (!email) continue;
+
+    const empId = (row[0] || '').toString().trim();
+    const name  = (row[1] || '').toString().trim();
+    const local = email.split('@')[0] || '';
+
+    const aDates = []; const lopDates = [];
+    let aCount = 0, lopCount = 0;
+
+    const maxCols = Math.max(headerRow.length, row.length);
+    for (let c = 6; c < maxCols; c++) {
+      const cellRaw = (row[c] ?? '').toString().trim();
+      const cell = cellRaw.toUpperCase();
+      let label = null;
+      if (cell === 'A' || cell === 'LOP') {
+        label = headerRow[c];
+        if (!label){
+          const above = rows[headerIdx - 1]?.[c];
+          const below = rows[headerIdx + 1]?.[c];
+          label = normalizeHeaderValue(above) || normalizeHeaderValue(below) || `Col ${colLetter(c)}`;
+        }
+      }
+      if (cell === 'A') { aDates.push(label); aCount++; }
+      if (cell === 'LOP') { lopDates.push(label); lopCount++; }
+    }
+    if (aDates.length > 0 || lopDates.length > 0) {
+      results.push({ email, local, name, emp_id: empId, dates_a: aDates, dates_lop: lopDates, a_count: aCount, lop_count: lopCount, batch_key: batchKey });
+    }
+  }
+  return { headerRow, rows, results, headerIdx, emailCol, sheetName, batch_key: batchKey };
+}
+
+/* ---------- SMTP ---------- */
+async function getSmtpConfig() {
+  return new Promise((resolve, reject) => {
+    db.get("SELECT * FROM smtp_settings WHERE id=1", (err, row) => {
+      if (err) return reject(err);
+      if (!row) return reject(new Error('SMTP settings not found.'));
+      resolve({
+        host: row.host || '',
+        port: row.port || 587,
+        secure: !!row.secure,
+        auth: (row.user && row.pass) ? { user: row.user, pass: row.pass } : undefined,
+        from: row.from_addr || row.user || ''
+      });
+    });
+  });
+}
+
+/* ---------- Core actions ---------- */
+async function generateReport(excelPath) {
+  const parsed = parseExcel(excelPath);
+  for (const item of parsed.results) {
+    await new Promise((resolve, reject) => {
+      db.run(
+        `INSERT INTO mail_logs (recipient, emp_name, emp_id, dates, dates_a, dates_lop, absent_count, lop_count, batch_key, is_deleted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+        [
+          item.email,
+          item.name || item.local,
+          item.emp_id || '',
+          JSON.stringify(item.dates_a),
+          JSON.stringify(item.dates_a),
+          JSON.stringify(item.dates_lop),
+          item.a_count || 0,
+          item.lop_count || 0,
+          item.batch_key || ''
+        ],
+        (err) => err ? reject(err) : resolve()
+      );
+    });
+  }
+  return { count: parsed.results.length, batch_key: parsed.batch_key };
+}
+
+async function compareWithBaseline(excelPath) {
+  const parsed = parseExcel(excelPath);
+  const batchKey = parsed.batch_key || '';
+  if (!batchKey) throw new Error('Could not detect batch period (start/end dates).');
+
+  const baseline = await new Promise((resolve, reject) => {
+    db.all(
+      `SELECT recipient, emp_name, emp_id, absent_count, dates_a
+       FROM mail_logs
+       WHERE batch_key = ?`,
+      [batchKey],
+      (err, rows) => err ? reject(err) : resolve(rows || [])
+    );
+  });
+
+  const baseByKey = new Map();
+  for (const b of baseline) {
+    const key = (b.recipient || '').toLowerCase() || `empid:${b.emp_id || ''}`;
+    let baseADates = []; try { baseADates = JSON.parse(b.dates_a || '[]'); } catch { baseADates = []; }
+    const baseACount = Number.isFinite(b.absent_count) ? Number(b.absent_count) : baseADates.length;
+    baseByKey.set(key, { ...b, aDates: baseADates, aCount: baseACount });
+  }
+
+  const newByKey = new Map();
+  for (const item of parsed.results) {
+    const key = (item.email || '').toLowerCase() || `empid:${item.emp_id || ''}`;
+    const aCount = Number.isFinite(item.a_count) ? Number(item.a_count) : (item.dates_a?.length || 0);
+    newByKey.set(key, { email: item.email, emp_id: item.emp_id, emp_name: item.name || item.local, a_count: aCount, aDates: item.dates_a || [] });
+  }
+
+  const rows = [];
+  for (const [key, b] of baseByKey.entries()) {
+    const n = newByKey.get(key) || { email: b.recipient, emp_id: b.emp_id, emp_name: b.emp_name, a_count: 0, aDates: [] };
+
+    const baseCount = Number.isFinite(b.aCount) ? b.aCount : (b.aDates?.length || 0);
+    const newCount  = Number.isFinite(n.a_count) ? n.a_count : (n.aDates?.length || 0);
+    const delta = newCount - baseCount;
+
+    const baseSet = new Set((b.aDates || []).map(String));
+    const newSet  = new Set((n.aDates || []).map(String));
+    const changed = [];
+    for (const d of baseSet) if (!newSet.has(d)) changed.push(d);
+    const changedPretty = changed.map(formatDateLabel).join(', ');
+
+    if (delta < 0 && changed.length > 0) {
+      rows.push({
+        emp_id: n.emp_id || b.emp_id || '',
+        emp_name: n.emp_name || b.emp_name || '',
+        email: n.email || b.recipient || '',
+        change: delta,
+        changed_dates: changedPretty
+      });
+    }
+  }
+
+  return { batch_key: batchKey, rows };
+}
+
+async function sendMailsByIds(ids) {
+  const smtp = await getSmtpConfig();
+  if (!smtp.host || !smtp.from || !smtp.auth) throw new Error('SMTP settings are incomplete. Configure it in Settings.');
+
+  const transporter = nodemailer.createTransport({
+    host: smtp.host, port: smtp.port, secure: smtp.secure, requireTLS: true, auth: smtp.auth, logger: true, debug: true
+  });
+
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = await new Promise((resolve, reject) => {
+    db.all(`SELECT id, recipient, emp_name, dates_a, dates FROM mail_logs WHERE id IN (${placeholders})`, ids, (err, rows) => err ? reject(err) : resolve(rows || []));
+  });
+
+  let sent = 0, failed = 0;
+  for (const r of rows) {
+    let datesArr; try { datesArr = JSON.parse(r.dates_a || r.dates || '[]'); } catch { datesArr = String(r.dates || '').split(',').map(s=>s.trim()); }
+    const html = buildMailDraftHTML(r.emp_name || (r.recipient||'').split('@')[0], datesArr);
+    try { await transporter.sendMail({ from: smtp.from, to: r.recipient, subject: "Regularization of Attendance", html }); sent++; }
+    catch (e) { failed++; console.error("Send error:", e.message); }
+  }
+  return { sent, failed };
+}
+
+/* ---------- Routes ---------- */
+app.get('/login', (req, res) => res.render('login', { error: null }));
+app.post('/login', (req, res) => {
+  const { username, password } = req.body;
+  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) { req.session.user = 'admin'; res.redirect('/'); }
+  else res.status(401).render('login', { error: 'Invalid credentials' });
+});
+app.get('/logout', (req, res) => req.session.destroy(() => res.redirect('/login')));
+
+app.get('/', requireAuth, (req, res) => res.render('dashboard', { banner: '' }));
+
+app.get('/settings', requireAuth, (req, res) => db.get("SELECT * FROM smtp_settings WHERE id=1", (err, row) => {
+  if (err) return res.status(500).send(err.message); res.render('settings', { settings: row || {}, banner: '' });
+}));
+app.post('/settings', requireAuth, (req, res) => {
+  const { host, port, secure, user, pass, from_addr } = req.body;
+  db.run(`UPDATE smtp_settings SET host=?, port=?, secure=?, user=?, pass=?, from_addr=? WHERE id=1`,
+    [host || '', parseInt(port || 587, 10), secure ? 1 : 0, user || '', pass || '', from_addr || ''],
+    (err) => err ? res.status(500).send(err.message) : res.redirect('/settings'));
+});
+
+app.get('/upload', requireAuth, (req, res) => res.render('upload', { preview: null, error: null, banner: '' }));
+app.post('/upload', requireAuth, upload.single('excel'), (req, res) => {
+  if (!req.file) return res.status(400).render('upload', { preview: null, error: 'Please upload an .xls/.xlsx file.', banner: '' });
+  try {
+    const parsed = parseExcel(req.file.path);
+    req.session.lastUploadPath = req.file.path;
+    req.session.lastBatchKey = parsed.batch_key;
+    const preview = { file: req.file.filename, recipients: parsed.results.length, batch_key: parsed.batch_key };
+    res.render('upload', { preview, error: null, banner: `Uploaded ${req.file.filename}` });
+  } catch (err) { res.status(400).render('upload', { preview: null, error: err.message, banner: '' }); }
+});
+
+app.post('/report', requireAuth, async (req, res) => {
+  const excelPath = req.session.lastUploadPath;
+  if (!excelPath || !fs.existsSync(excelPath)) return res.status(400).send('No uploaded Excel file found. Please upload again.');
+  try { const out = await generateReport(excelPath); res.redirect('/reports?msg=' + encodeURIComponent(`Report generated for ${out.batch_key}.`)); }
+  catch (err) { res.status(500).send('Error generating report: ' + err.message); }
+});
+
+app.post('/compare', requireAuth, async (req, res) => {
+  const excelPath = req.session.lastUploadPath;
+  if (!excelPath || !fs.existsSync(excelPath)) return res.status(400).send('No uploaded Excel file found. Please upload again.');
+  try { const cmp = await compareWithBaseline(excelPath); res.render('compare', { batch_key: cmp.batch_key, rows: cmp.rows, banner: '' }); }
+  catch (err) { res.status(500).send('Error during comparison: ' + err.message); }
+});
+
+app.get('/reports', requireAuth, (req, res) => {
+  db.all(
+    `SELECT id, recipient, emp_name, emp_id, dates, dates_a, dates_lop, absent_count, lop_count, batch_key, created_at
+     FROM mail_logs
+     WHERE COALESCE(is_deleted,0)=0
+     ORDER BY id DESC
+     LIMIT 200`,
+    (err, rows) => {
+      if (err) return res.status(500).send(err.message);
+      const records = (rows || []).map(r => {
+        let aDatesArr=[]; try{ aDatesArr = JSON.parse(r.dates_a || r.dates || '[]'); }catch{ aDatesArr = String(r.dates || '').split(',').map(s=>s.trim()).filter(Boolean); }
+        let lopDatesArr=[]; try{ lopDatesArr = JSON.parse(r.dates_lop || '[]'); }catch{}
+        const name = r.emp_name || (r.recipient ? r.recipient.split('@')[0] : '');
+        const lopDatesForTable = lopDatesArr.map(formatDateLabel).join(', ');
+        const absentDatesForTable = aDatesArr.map(formatDateLabel).join(', ');
+        return { ...r, emp_name: name, lop_dates: lopDatesForTable, absent_dates: absentDatesForTable, absent_count: r.absent_count || 0, lop_count: r.lop_count || 0, total_count: (r.absent_count || 0) + (r.lop_count || 0) };
+      });
+      res.render('reports', { records, banner: req.query.msg || req.query.err || '' });
+    }
+  );
+});
+
+app.post('/reports/delete', requireAuth, (req, res) => {
+  let ids = req.body.ids;
+  if (!ids) return res.redirect('/reports?err=' + encodeURIComponent('No rows selected.'));
+  if (!Array.isArray(ids)) ids = [ids];
+  ids = ids.map(x => String(x)).filter(x => /^\d+$/.test(x));
+  if (!ids.length) return res.redirect('/reports?err=' + encodeURIComponent('No valid rows.'));
+  const placeholders = ids.map(() => '?').join(',');
+  db.run(`UPDATE mail_logs SET is_deleted=1 WHERE id IN (${placeholders})`, ids, (err) => {
+    if (err) return res.redirect('/reports?err=' + encodeURIComponent(err.message));
+    res.redirect('/reports?msg=' + encodeURIComponent(`Soft-deleted ${ids.length} row(s).`));
+  });
+});
+
+app.post('/reports/send', requireAuth, async (req, res) => {
+  let ids = req.body.ids;
+  if (!ids) return res.redirect('/reports?err=' + encodeURIComponent('No rows selected.'));
+  if (!Array.isArray(ids)) ids = [ids];
+  ids = ids.map(x => String(x)).filter(x => /^\d+$/.test(x));
+  if (!ids.length) return res.redirect('/reports?err=' + encodeURIComponent('No valid rows.'));
+  try { const { sent, failed } = await sendMailsByIds(ids); res.redirect('/reports?msg=' + encodeURIComponent(`Sent: ${sent}, Failed: ${failed}`)); }
+  catch (e) { res.redirect('/reports?err=' + encodeURIComponent(e.message)); }
+});
+
+const excelTmpDir = path.join(__dirname, 'exports');
+if (!fs.existsSync(excelTmpDir)) fs.mkdirSync(excelTmpDir, { recursive: true });
+app.get('/reports/export', requireAuth, (req, res) => {
+  const batchKey = req.query.batch_key || null;
+  const where = "WHERE COALESCE(is_deleted,0)=0" + (batchKey ? " AND batch_key = ?" : "");
+  const params = batchKey ? [batchKey] : [];
+  db.all(
+    `SELECT recipient, emp_name, emp_id, dates_a, dates_lop, absent_count, lop_count, created_at, batch_key
+     FROM mail_logs
+     ${where}
+     ORDER BY id DESC
+     LIMIT 200`,
+    params,
+    (err, rows) => {
+      if (err) return res.status(500).send(err.message);
+      const header = ["Employee ID","Employee Name","Email ID","Count","LOP Dates","Absent Dates","Absent count","LOP count","Created At","Batch"];
+      const data = [header];
+      for (const r of (rows || [])) {
+        let lopDates=[]; try{ lopDates = JSON.parse(r.dates_lop || '[]'); }catch{}
+        let aDates=[]; try{ aDates = JSON.parse(r.dates_a || '[]'); }catch{}
+        const lopPretty = (lopDates||[]).map(formatDateLabel).join(', ');
+        const aPretty = (aDates||[]).map(formatDateLabel).join(', ');
+        const total = (r.absent_count || 0) + (r.lop_count || 0);
+        data.push([ r.emp_id||"", r.emp_name||"", r.recipient||"", total, lopPretty, aPretty, r.absent_count||0, r.lop_count||0, r.created_at||"", r.batch_key||"" ]);
+      }
+      const wb = xlsx.utils.book_new();
+      const ws = xlsx.utils.aoa_to_sheet(data);
+      xlsx.utils.book_append_sheet(wb, ws, 'Reports');
+      const fname = `reports_export_${Date.now()}.xlsx`;
+      const fpath = path.join(excelTmpDir, fname);
+      xlsx.writeFile(wb, fpath);
+      res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      fs.createReadStream(fpath).pipe(res);
+    }
+  );
+});
+
+/* ---------- Misc ---------- */
+app.get('/health', (req, res) => res.json({ ok: true }));
+app.use((req, res) => res.status(404).send('Not found'));
+
+app.listen(PORT, HOST, () => console.log(`attendance-mailer v5.2 listening at http://${HOST}:${PORT}`));
