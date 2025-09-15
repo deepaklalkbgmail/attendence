@@ -1,0 +1,38 @@
+
+<%- include('partials/header', { banner: '' }) %>
+<div class="hero">
+  <div>
+    <h1>HR Attendance Mailer</h1>
+    <p>Upload Excel from Zoho People, generate a baseline, compare new updates, export reports, and send reminders in minutes.</p>
+    <div style="height:14px"></div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap">
+      <a class="btn primary" href="/upload" data-show-loader>Upload Attendance</a>
+      <a class="btn" href="/reports" data-show-loader>Go to Reports</a>
+      <a class="btn" href="/settings" data-show-loader>SMTP Settings</a>
+    </div>
+  </div>
+  <img src="/public/img/hr-hero.svg" alt="HR analytics illustration">
+</div>
+<div style="height:20px"></div>
+<div class="grid grid-2">
+  <div class="card">
+    <div class="hd"><h2>Quick Steps</h2></div>
+    <div class="bd">
+      <ol>
+        <li>Upload the Zoho People Excel.</li>
+        <li>Click <strong>Report Generation</strong> to save the baseline for that date range.</li>
+        <li>Upload the latest Excel and run <strong>Compare</strong> to see fixes (<em>Change</em> & <em>Changed Dates</em>).</li>
+        <li>Export to Excel or send emails in bulk from the Reports page.</li>
+      </ol>
+    </div>
+  </div>
+  <div class="card">
+    <div class="hd"><h2>Status</h2></div>
+    <div class="bd">
+      <div class="helper">Use <a href="/health">/health</a> for a quick liveness check.</div>
+      <div style="height:8px"></div>
+      <div class="badge-dot ok"><span class="dot"></span><span>Ready</span></div>
+    </div>
+  </div>
+</div>
+<%- include('partials/footer') %>

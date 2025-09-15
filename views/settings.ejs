@@ -1,0 +1,41 @@
+
+<%- include('partials/header', { banner: '' }) %>
+<div class="card">
+  <div class="hd"><h2>SMTP Settings</h2></div>
+  <div class="bd">
+    <form method="post" action="/settings" class="grid grid-2 js-loading-form">
+      <div>
+        <label>Host</label>
+        <input class="input" name="host" value="<%= (settings && settings.host) || '' %>" placeholder="smtp.office365.com">
+      </div>
+      <div>
+        <label>Port</label>
+        <input class="input" name="port" value="<%= (settings && settings.port) || 587 %>">
+      </div>
+      <div>
+        <label>Secure</label>
+        <select name="secure">
+          <option value="0" <%= settings && Number(settings.secure)===0 ? 'selected' : '' %>>No (STARTTLS)</option>
+          <option value="1" <%= settings && Number(settings.secure)===1 ? 'selected' : '' %>>Yes (SMTPS)</option>
+        </select>
+      </div>
+      <div>
+        <label>Username</label>
+        <input class="input" name="user" value="<%= (settings && settings.user) || '' %>">
+      </div>
+      <div>
+        <label>Password</label>
+        <input class="input" type="password" name="pass" value="<%= (settings && settings.pass) || '' %>">
+      </div>
+      <div>
+        <label>From Address</label>
+        <input class="input" name="from_addr" value="<%= (settings && settings.from_addr) || '' %>" placeholder="hr@yourcompany.com">
+      </div>
+      <div style="grid-column:1/-1">
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+    <div class="helper">Tip: Verify with a standalone script if SMTP rejects GUI credentials.</div>
+  </div>
+</div>
+<%- include('partials/footer') %>

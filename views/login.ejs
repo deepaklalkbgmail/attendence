@@ -1,0 +1,35 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Login • Attendance Mailer</title>
+  <link rel="stylesheet" href="/public/css/app.css">
+</head>
+<body>
+  <div class="container" style="display:grid; place-items:center; min-height:100vh">
+    <div class="card" style="max-width:420px; width:100%">
+      <div class="hd"><h2>Admin Login</h2></div>
+      <div class="bd">
+        <% if (typeof error !== 'undefined' && error) { %>
+          <div class="badge-dot danger" style="margin-bottom:12px"><span class="dot"></span><span><%= error %></span></div>
+        <% } %>
+        <form method="post" action="/login" class="js-loading-form">
+          <label>Username</label>
+          <input class="input" name="username" placeholder="admin" required>
+          <div style="height:10px"></div>
+          <label>Password</label>
+          <input class="input" type="password" name="password" placeholder="admin" required>
+          <div style="height:16px"></div>
+          <button class="btn primary" type="submit">Sign in</button>
+        </form>
+        <div style="height:12px"></div>
+        <div class="helper">Default credentials: <code>admin / admin</code></div>
+      </div>
+    </div>
+  </div>
+  <div id="loader-overlay" class="loader-overlay"><div class="loader"></div></div>
+  <script src="/public/js/app.js"></script>
+</body>
+</html>

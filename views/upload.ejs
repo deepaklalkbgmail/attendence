@@ -1,0 +1,42 @@
+
+<%- include('partials/header', { banner: (error ? ('Error: ' + error) : (preview ? ('Uploaded: ' + preview.file + ' • recipients: ' + preview.recipients) : '')) }) %>
+<div class="grid grid-2">
+  <div class="card">
+    <div class="hd"><h2>Upload Attendance Excel</h2></div>
+    <div class="bd">
+      <form action="/upload" method="post" enctype="multipart/form-data" class="js-loading-form">
+        <div class="drop">
+          <input type="file" class="file" name="excel" accept=".xls,.xlsx" required>
+          <div class="helper">Drag & drop your Excel here or click to choose</div>
+        </div>
+        <div style="height:14px"></div>
+        <button class="btn primary" type="submit">Upload</button>
+      </form>
+      <% if (preview) { %>
+      <div style="height:16px"></div>
+      <div class="badge-dot"><span class="dot"></span><span>File: <strong><%= preview.file %></strong></span></div>
+      <div class="helper">Detected recipients with absences: <%= preview.recipients %></div>
+      <div class="helper">Batch: <%= preview.batch_key %></div>
+      <div style="height:16px"></div>
+      <form action="/report" method="post" class="js-loading-form" style="display:inline">
+        <button class="btn accent" type="submit">Report Generation</button>
+      </form>
+      <form action="/compare" method="post" class="js-loading-form" style="display:inline">
+        <button class="btn" type="submit">Compare with Baseline</button>
+      </form>
+      <% } %>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="hd"><h2>Tips</h2></div>
+    <div class="bd">
+      <ul>
+        <li>Ensure the file has <strong>Employee Id/Name/Email</strong> in the header row.</li>
+        <li>We auto-detect <strong>date columns</strong> from G onwards.</li>
+        <li>Valid marks: <span class="badge-dot danger"><span class="dot"></span><span>A</span></span> and <span class="badge-dot warn"><span class="dot"></span><span>LOP</span></span>.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+<%- include('partials/footer') %>

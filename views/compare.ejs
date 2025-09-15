@@ -1,0 +1,34 @@
+
+<%- include('partials/header', { banner: 'Comparison batch: ' + (batch_key || '') }) %>
+<div class="card">
+  <div class="hd"><h2>Compare Result</h2></div>
+  <div class="bd">
+    <div class="helper">Shows reductions in "A" (fixed to P/L). Negative change means improvement.</div>
+    <div style="height:12px"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Employee ID</th>
+            <th>Employee Name</th>
+            <th>Email ID</th>
+            <th>Change</th>
+            <th>Changed Dates</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% rows.forEach(x => { %>
+            <tr>
+              <td class="k"><%= x.emp_id || '' %></td>
+              <td><%= x.emp_name || '' %></td>
+              <td><%= x.email || '' %></td>
+              <td class="k"><%= x.change %></td>
+              <td><%= x.changed_dates || '' %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<%- include('partials/footer') %>

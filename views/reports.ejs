@@ -1,0 +1,53 @@
+
+<%- include('partials/header', { banner }) %>
+<div class="card">
+  <div class="hd"><h2>Reports</h2></div>
+  <div class="bd">
+    <form method="post" action="/reports/send" class="js-loading-form" style="display:inline">
+      <button class="btn primary" type="submit">Send Mail</button>
+    </form>
+    <form method="post" action="/reports/delete" class="js-loading-form" style="display:inline">
+      <button class="btn danger" type="submit">Delete Selected</button>
+    </form>
+    <a class="btn" href="/reports/export" data-show-loader>Download Excel</a>
+    <div style="height:12px"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:36px"><input type="checkbox" data-select-all></th>
+            <th>Employee ID</th>
+            <th>Employee Name</th>
+            <th>Email ID</th>
+            <th>Count</th>
+            <th>LOP Dates</th>
+            <th>Absent Dates</th>
+            <th>Absent count</th>
+            <th>LOP count</th>
+            <th>Created</th>
+            <th>Batch</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% records.forEach(r => { %>
+            <tr>
+              <td><input type="checkbox" name="ids" form="<%= 'f-'+r.id %>" value="<%= r.id %>"></td>
+              <td class="k"><%= r.emp_id || '' %></td>
+              <td><%= r.emp_name || '' %></td>
+              <td><%= r.recipient || '' %></td>
+              <td class="k"><%= r.total_count %></td>
+              <td><%= r.lop_dates || '' %></td>
+              <td><%= r.absent_dates || '' %></td>
+              <td class="k"><%= r.absent_count %></td>
+              <td class="k"><%= r.lop_count %></td>
+              <td class="k"><%= r.created_at %></td>
+              <td><%= r.batch_key || '' %></td>
+            </tr>
+            <form id="<%= 'f-'+r.id %>"></form>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<%- include('partials/footer') %>

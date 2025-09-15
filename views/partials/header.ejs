@@ -1,0 +1,31 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Attendance Mailer</title>
+  <link rel="stylesheet" href="/public/css/app.css">
+</head>
+<body>
+  <div class="nav">
+    <div class="nav-inner">
+      <div class="brand">
+        <div class="avatar"></div>
+        <div>Attendance <span style="color:#9fb3ff">Mailer</span></div>
+        <span class="badge">HR Suite</span>
+      </div>
+      <div class="navlinks">
+        <a href="/" data-show-loader>Dashboard</a>
+        <a href="/upload" data-show-loader>Upload</a>
+        <a href="/reports" data-show-loader>Reports</a>
+        <a href="/settings" data-show-loader>Settings</a>
+        <form action="/logout" method="get"><button type="submit" class="btn">Logout</button></form>
+      </div>
+    </div>
+  </div>
+  <div class="toast" <% if (typeof banner !== 'undefined' && banner) { %> data-msg="<%= banner %>" <% } %>>
+    <span class="text"></span>
+  </div>
+  <div id="loader-overlay" class="loader-overlay"><div class="loader" aria-label="Loading"></div></div>
+  <div class="container">
